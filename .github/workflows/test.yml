@@ -1,0 +1,27 @@
+name: test-scanner
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_n:
+        description: "عدد الأسهم المفحوصة"
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      CHAT_ID: ${{ secrets.CHAT_ID }}
+      TEST_N: ${{ inputs.test_n }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q yfinance pandas numpy matplotlib requests arabic-reshaper
+      - run: python test_scan.py
