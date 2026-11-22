@@ -1,5 +1,6 @@
-
 yfinance
 pandas
-requests
 numpy
+requests
+matplotlib
+arabic-reshaper
