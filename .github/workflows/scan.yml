@@ -1,31 +1,39 @@
-name: scan
+name: scanner
+
 on:
   schedule:
-    - cron: "*/30 7-12 * * 0-4"   # كل نصف ساعة، 10:00-15:30 بتوقيت الرياض، الأحد-الخميس
+    - cron: "2,32 7-22 * * 0-5"
   workflow_dispatch:
+
 permissions:
   contents: write
+
 concurrency:
-  group: scan
+  group: scanner
   cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      CHAT_ID: ${{ secrets.CHAT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -q yfinance pandas numpy matplotlib requests arabic-reshaper
       - run: python scanner.py
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT: ${{ secrets.TG_CHAT }}
-      - name: Save state
+      - name: حفظ حالة التنبيهات المرسلة
         run: |
-          git config user.name "scanner-bot"
-          git config user.email "scanner-bot@users.noreply.github.com"
-          git add state.json
-          git diff --cached --quiet || (git commit -m "update state" && git push)
+          if [ -f sent_state.json ]; then
+            git config user.name "scanner-bot"
+            git config user.email "scanner-bot@users.noreply.github.com"
+            git add sent_state.json
+            git commit -m "state" || echo "no changes"
+            git push
+          else
+            echo "لا يوجد ملف حالة (السوق مغلق)"
+          fi
