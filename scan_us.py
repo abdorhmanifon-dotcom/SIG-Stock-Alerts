@@ -1,4 +1,5 @@
-import os, requests, yfinance as yf
+import os, time, requests, yfinance as yf
+import pandas as pd
 from yfinance import EquityQuery
 
 # ===== فلتر السوق =====
@@ -17,7 +18,8 @@ FRESH_BARS = 6
 def send(text):
     requests.post(
         f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
-        data={"chat_id": os.environ["TG_CHAT"], "text": text},
+        data={"chat_id": os.environ["TG_CHAT"], "text": text,
+              "disable_web_page_preview": True},
         timeout=20,
     )
 
@@ -39,8 +41,12 @@ def get_universe():
         if not quotes:
             break
         for x in quotes:
-            out[x["symbol"]] = (
-                x.get("shortName") or x.get("longName") or x["symbol"],
+            s = x["symbol"]
+            # تجاهل الحقوق والوارنتات
+            if len(s) == 5 and s[-1] in "WRU":
+                continue
+            out[s] = (
+                x.get("shortName") or x.get("longName") or s,
                 x.get("marketCap"),
             )
         offset += 250
@@ -52,7 +58,8 @@ def get_universe():
 def check(d):
     hh = d.High.rolling(QUIET_LEN).max().shift(1)
     ll = d.Low.rolling(QUIET_LEN).min().shift(1)
-    quiet = (hh - ll) / ll * 100 <= QUIET_MAX
+    quiet_pct = (hh - ll) / ll * 100
+    quiet = quiet_pct <= QUIET_MAX
 
     avgv = d.Volume.rolling(VOL_LEN).mean().shift(1)
     spike = (avgv > 0) & (d.Volume >= avgv * VOL_MULT)
@@ -66,15 +73,62 @@ def check(d):
 
     sig = quiet & spike & strong & (d.Close > vw)
     recent = sig.iloc[:-1].tail(FRESH_BARS)  # نتجاهل الشمعة اللي ما اكتملت
-    return recent[recent].index[-1] if recent.any() else None
+    if not recent.any():
+        return None
+
+    ts = recent[recent].index[-1]
+    today = d.index.normalize() == ts.normalize()
+    day_vol = d[today & (d.index <= ts)].Volume.sum()
+    prev = d[d.index.normalize() < ts.normalize()]
+    prev_close = prev.Close.iloc[-1] if len(prev) else None
+    price = d.Close[ts]
+
+    return ts, {
+        "price": price,
+        "move": move[ts],
+        "vol": d.Volume[ts],
+        "vmult": d.Volume[ts] / avgv[ts],
+        "quiet": quiet_pct[ts],
+        "hh": hh[ts],
+        "vw": vw[ts],
+        "day_vol": day_vol,
+        "chg": (price / prev_close - 1) * 100 if prev_close else None,
+    }
+
+
+def build_message(t, name, cap, ts, i):
+    close_time = (ts + pd.Timedelta(minutes=1)).tz_convert("Asia/Riyadh")
+    cap_txt = f"{cap/1e6:,.0f} مليون $" if cap else "-"
+    chg_txt = f"{i['chg']:+.1f}%" if i["chg"] is not None else "-"
+    return (
+        f"🚨 سيولة مفاجئة بعد خمول 🇺🇸\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"📛 السهم: {name}\n"
+        f"🔖 الرمز: {t}\n"
+        f"🔥 الحدث: انفجار حجم + اختراق بعد فترة خمول (فريم دقيقة)\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 السعر: {i['price']:.2f}$\n"
+        f"📈 حركة الشمعة: {i['move']:+.1f}%\n"
+        f"📊 حجم الشمعة: {i['vol']:,.0f} سهم ({i['vmult']:.1f}x المتوسط)\n"
+        f"📏 نطاق الخمول السابق: {i['quiet']:.1f}%\n"
+        f"🔓 اخترق أعلى سعر قبلها: {i['hh']:.2f}$\n"
+        f"〰️ VWAP: {i['vw']:.2f}$\n"
+        f"📅 التغير عن آخر سعر أمس: {chg_txt}\n"
+        f"🧮 حجم اليوم حتى الآن: {i['day_vol']:,.0f} سهم\n"
+        f"🏢 القيمة السوقية: {cap_txt}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"📆 التاريخ: {close_time:%Y-%m-%d}\n"
+        f"🕐 الوقت: {close_time:%H:%M} (السعودية)\n"
+        f"🔗 https://www.tradingview.com/chart/?symbol={t}"
+    )
 
 
 universe = get_universe()
 tickers = list(universe)
 print("عدد الأسهم بعد الفلتر:", len(tickers))
 
-for i in range(0, len(tickers), 100):
-    chunk = tickers[i:i + 100]
+for k in range(0, len(tickers), 100):
+    chunk = tickers[k:k + 100]
     try:
         df = yf.download(chunk, period="2d", interval="1m", prepost=True,
                          group_by="ticker", progress=False, threads=True)
@@ -87,20 +141,12 @@ for i in range(0, len(tickers), 100):
             d = df[t].dropna()
             if len(d) < VOL_LEN + 5:
                 continue
-            ts = check(d)
-            if ts is None:
+            res = check(d)
+            if res is None:
                 continue
-
+            ts, info = res
             name, cap = universe[t]
-            cap_txt = f"{cap/1e6:.0f}M$" if cap else "-"
-            time_sa = ts.tz_convert("Asia/Riyadh").strftime("%Y-%m-%d %H:%M")
-            send(
-                f"📛 السهم: {name}\n"
-                f"🔖 الرمز: {t}\n"
-                f"🔥 التنبيه: سيولة مفاجئة بعد خمول\n"
-                f"💰 السعر: {d.Close[ts]:.2f}\n"
-                f"🏢 القيمة السوقية: {cap_txt}\n"
-                f"🕐 الوقت: {time_sa} (السعودية)"
-            )
+            send(build_message(t, name, cap, ts, info))
+            time.sleep(1)
         except Exception as e:
             print(t, e)
