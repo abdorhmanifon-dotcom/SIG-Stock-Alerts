@@ -222,8 +222,9 @@ SYMBOLS = {
 }
 
 # ===== تيليجرام (من Secrets في GitHub، وإلا القيم الاحتياطية) =====
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "9092598432:AAGARSJz4ye5PgDQVwwClyDa3jhS56Mp5_g"
-CHAT_ID = os.environ.get("CHAT_ID") or "7120527121"
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
+
 
 # ===== الإعادة التاريخية (غير مستخدمة في التشغيل المجدول) =====
 REPLAY_RANGES = None
