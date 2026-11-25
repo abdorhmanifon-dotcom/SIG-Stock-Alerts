@@ -1,0 +1,93 @@
+name: check_all
+on:
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -U yfinance requests pandas alpaca-py
+      - name: check
+        env:
+          TOKEN: ${{ secrets.BOT_TOKEN || secrets.TG_TOKEN }}
+          CHAT: ${{ secrets.CHAT_ID || secrets.TG_CHAT }}
+          AK: ${{ secrets.ALPACA_KEY }}
+          ASK: ${{ secrets.ALPACA_SECRET }}
+          H1: ${{ secrets.BOT_TOKEN != '' }}
+          H2: ${{ secrets.CHAT_ID != '' }}
+          H3: ${{ secrets.TG_TOKEN != '' }}
+          H4: ${{ secrets.TG_CHAT != '' }}
+        run: |
+          python - <<'EOF'
+          import os, requests, py_compile
+          from datetime import datetime, timedelta, timezone
+
+          res = []
+          def ok(name, good, note=""):
+              res.append(("✅ " if good else "❌ ") + name + (f" — {note}" if note else ""))
+
+          tok, chat = os.environ.get("TOKEN", ""), os.environ.get("CHAT", "")
+          ak, sk = os.environ.get("AK", ""), os.environ.get("ASK", "")
+
+          # 1) الأسرار
+          for k, n in (("H1", "BOT_TOKEN"), ("H2", "CHAT_ID"), ("H3", "TG_TOKEN"), ("H4", "TG_CHAT")):
+              res.append(f"🔑 سر {n}: " + ("موجود" if os.environ.get(k) == "true" else "غير موجود"))
+          ok("التوكن واصل للفحص", bool(tok))
+          ok("رقم الشات واصل للفحص", bool(chat))
+          ok("مفاتيح Alpaca", bool(ak) and bool(sk))
+
+          # 2) الملفات
+          for f in ["common.py", "scan_us.py", "scan_live.py", "summary.py"]:
+              if not os.path.exists(f):
+                  ok(f"ملف {f}", False, "مو موجود")
+                  continue
+              try:
+                  py_compile.compile(f, doraise=True)
+                  ok(f"ملف {f}", True)
+              except Exception:
+                  ok(f"ملف {f}", False, "فيه خطأ في الكتابة")
+          for n in ["scan_us", "scan_live", "summary"]:
+              ok(f"workflow {n}.yml", os.path.exists(f".github/workflows/{n}.yml"))
+
+          # 3) Alpaca
+          try:
+              from alpaca.data.historical import StockHistoricalDataClient
+              from alpaca.data.requests import StockBarsRequest
+              from alpaca.data.timeframe import TimeFrame
+              from alpaca.data.enums import DataFeed
+              c = StockHistoricalDataClient(ak, sk)
+              now = datetime.now(timezone.utc)
+              r = c.get_stock_bars(StockBarsRequest(
+                  symbol_or_symbols="SPY", timeframe=TimeFrame.Minute,
+                  start=now - timedelta(days=5), end=now - timedelta(minutes=20),
+                  feed=DataFeed.IEX, limit=5))
+              ok("اتصال Alpaca", True, f"جاب {len(r.data.get('SPY', []))} شموع")
+          except Exception as e:
+              ok("اتصال Alpaca", False, str(e)[:80])
+
+          # 4) فلتر السوق
+          try:
+              import yfinance as yf
+              from yfinance import EquityQuery
+              q = EquityQuery("and", [
+                  EquityQuery("eq", ["region", "us"]),
+                  EquityQuery("btwn", ["intradayprice", 1, 10]),
+                  EquityQuery("lt", ["intradaymarketcap", 500000000])])
+              r = yf.screen(q, size=10)
+              ok("فلتر السوق (yfinance)", True, f"رجّع {len(r.get('quotes', []))} سهم")
+          except Exception as e:
+              ok("فلتر السوق (yfinance)", False, str(e)[:80])
+
+          # 5) تلجرام
+          msg = "🔍 فحص النظام\n" + "\n".join(res)
+          try:
+              r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                                data={"chat_id": chat, "text": msg}, timeout=15)
+              print("Telegram HTTP", r.status_code, r.json().get("description", ""))
+          except Exception as e:
+              print("Telegram فشل:", type(e).__name__)
+          print("\n".join(res))
+          EOF
