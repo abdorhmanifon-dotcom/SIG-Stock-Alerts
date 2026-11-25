@@ -1,27 +1,24 @@
-import os, time, requests, yfinance as yf
+import time, logging
+import yfinance as yf
 import pandas as pd
 from yfinance import EquityQuery
+from common import send, log_signal, recently_logged, t12
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+LOG = "data/signals_us.csv"
 
 # ===== فلتر السوق =====
 MIN_PRICE, MAX_PRICE = 1, 10
 MAX_CAP = 500_000_000
-MIN_CHG = 3            # أقل تغير % اليوم لدخول القائمة
-MIN_DAYVOL = 300_000   # أقل حجم تداول اليوم
+MIN_CHG = 3
+MIN_DAYVOL = 300_000
 
 # ===== شروط الإشارة =====
 VOL_LEN, VOL_MULT = 30, 5.0
 QUIET_LEN, QUIET_MAX = 20, 3.0
 MOVE = 3.0
 FRESH_BARS = 6
-
-
-def send(text):
-    requests.post(
-        f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
-        data={"chat_id": os.environ["TG_CHAT"], "text": text,
-              "disable_web_page_preview": True},
-        timeout=20,
-    )
 
 
 def get_universe():
@@ -42,13 +39,10 @@ def get_universe():
             break
         for x in quotes:
             s = x["symbol"]
-            # تجاهل الحقوق والوارنتات
             if len(s) == 5 and s[-1] in "WRU":
                 continue
-            out[s] = (
-                x.get("shortName") or x.get("longName") or s,
-                x.get("marketCap"),
-            )
+            out[s] = (x.get("shortName") or x.get("longName") or s,
+                      x.get("marketCap"))
         offset += 250
         if len(quotes) < 250:
             break
@@ -72,7 +66,7 @@ def check(d):
     vw = (tp * d.Volume).groupby(day).cumsum() / d.Volume.groupby(day).cumsum()
 
     sig = quiet & spike & strong & (d.Close > vw)
-    recent = sig.iloc[:-1].tail(FRESH_BARS)  # نتجاهل الشمعة اللي ما اكتملت
+    recent = sig.iloc[:-1].tail(FRESH_BARS)
     if not recent.any():
         return None
 
@@ -118,7 +112,7 @@ def build_message(t, name, cap, ts, i):
         f"🏢 القيمة السوقية: {cap_txt}\n"
         f"━━━━━━━━━━━━━━\n"
         f"📆 التاريخ: {close_time:%Y-%m-%d}\n"
-        f"🕐 الوقت: {close_time:%H:%M} (السعودية)\n"
+        f"🕐 الوقت: {t12(close_time)} (السعودية)\n"
         f"🔗 https://www.tradingview.com/chart/?symbol={t}"
     )
 
@@ -145,8 +139,12 @@ for k in range(0, len(tickers), 100):
             if res is None:
                 continue
             ts, info = res
+            close_ts = ts + pd.Timedelta(minutes=1)
+            if recently_logged(LOG, t, close_ts):
+                continue
             name, cap = universe[t]
             send(build_message(t, name, cap, ts, info))
+            log_signal(LOG, t, name, info["price"], close_ts)
             time.sleep(1)
         except Exception as e:
             print(t, e)
