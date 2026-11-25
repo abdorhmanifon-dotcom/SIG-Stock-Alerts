@@ -10,18 +10,33 @@ def t12(dt, seconds=False):
     return f"{h}:{dt.minute:02d}{sec} {suffix}"
 
 
+def _env(*names):
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v
+    return None
+
+
 def send(text):
+    token = _env("TG_TOKEN", "BOT_TOKEN")
+    chat = _env("TG_CHAT", "CHAT_ID")
+    if not token or not chat:
+        print("telegram: ناقص التوكن أو رقم الشات في env")
+        return
     for i in range(0, len(text), 3800):
         try:
-            requests.post(
-                f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
-                data={"chat_id": os.environ["TG_CHAT"],
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat,
                       "text": text[i:i + 3800],
                       "disable_web_page_preview": True},
                 timeout=15,
             )
+            if r.status_code != 200:
+                print("telegram HTTP", r.status_code)
         except Exception as e:
-            print("telegram", e)
+            print("telegram", type(e).__name__)
 
 
 def _fmt(ts):
